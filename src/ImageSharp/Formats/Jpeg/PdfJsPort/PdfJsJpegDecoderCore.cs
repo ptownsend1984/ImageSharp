@@ -14,6 +14,8 @@ using SixLabors.ImageSharp.PixelFormats;
 
 namespace SixLabors.ImageSharp.Formats.Jpeg.PdfJsPort
 {
+    using SixLabors.ImageSharp.Formats.Jpeg.Common;
+
     /// <summary>
     /// Performs the jpeg decoding operation.
     /// Ported from <see href="https://github.com/mozilla/pdf.js/blob/master/src/core/jpg.js"/> with additional fixes to handle common encoding errors
@@ -121,19 +123,19 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.PdfJsPort
 
             if (value == 0)
             {
-                return new PdfJsFileMarker(PdfJsJpegConstants.Markers.EOI, (int)stream.Length - 2);
+                return new PdfJsFileMarker(JpegConstants.Markers.EOI, (int)stream.Length - 2);
             }
 
-            if (marker[0] == PdfJsJpegConstants.Markers.Prefix)
+            if (marker[0] == JpegConstants.Markers.Prefix)
             {
                 // According to Section B.1.1.2:
                 // "Any marker may optionally be preceded by any number of fill bytes, which are bytes assigned code 0xFF."
-                while (marker[1] == PdfJsJpegConstants.Markers.Prefix)
+                while (marker[1] == JpegConstants.Markers.Prefix)
                 {
                     int suffix = stream.ReadByte();
                     if (suffix == -1)
                     {
-                        return new PdfJsFileMarker(PdfJsJpegConstants.Markers.EOI, (int)stream.Length - 2);
+                        return new PdfJsFileMarker(JpegConstants.Markers.EOI, (int)stream.Length - 2);
                     }
 
                     marker[1] = (byte)value;
@@ -207,7 +209,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.PdfJsPort
             // TODO: metadata only logic
             // Check for the Start Of Image marker.
             var fileMarker = new PdfJsFileMarker(this.ReadUint16(), 0);
-            if (fileMarker.Marker != PdfJsJpegConstants.Markers.SOI)
+            if (fileMarker.Marker != JpegConstants.Markers.SOI)
             {
                 throw new ImageFormatException("Missing SOI marker.");
             }
@@ -219,66 +221,66 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.PdfJsPort
             this.dcHuffmanTables = new PdfJsHuffmanTables();
             this.acHuffmanTables = new PdfJsHuffmanTables();
 
-            while (fileMarker.Marker != PdfJsJpegConstants.Markers.EOI)
+            while (fileMarker.Marker != JpegConstants.Markers.EOI)
             {
                 // Get the marker length
                 int remaining = this.ReadUint16() - 2;
 
                 switch (fileMarker.Marker)
                 {
-                    case PdfJsJpegConstants.Markers.APP0:
+                    case JpegConstants.Markers.APP0:
                         this.ProcessApplicationHeaderMarker(remaining);
                         break;
 
-                    case PdfJsJpegConstants.Markers.APP1:
+                    case JpegConstants.Markers.APP1:
                         this.ProcessApp1Marker(remaining, metaData);
                         break;
 
-                    case PdfJsJpegConstants.Markers.APP2:
+                    case JpegConstants.Markers.APP2:
                         this.ProcessApp2Marker(remaining, metaData);
                         break;
-                    case PdfJsJpegConstants.Markers.APP3:
-                    case PdfJsJpegConstants.Markers.APP4:
-                    case PdfJsJpegConstants.Markers.APP5:
-                    case PdfJsJpegConstants.Markers.APP6:
-                    case PdfJsJpegConstants.Markers.APP7:
-                    case PdfJsJpegConstants.Markers.APP8:
-                    case PdfJsJpegConstants.Markers.APP9:
-                    case PdfJsJpegConstants.Markers.APP10:
-                    case PdfJsJpegConstants.Markers.APP11:
-                    case PdfJsJpegConstants.Markers.APP12:
-                    case PdfJsJpegConstants.Markers.APP13:
+                    case JpegConstants.Markers.APP3:
+                    case JpegConstants.Markers.APP4:
+                    case JpegConstants.Markers.APP5:
+                    case JpegConstants.Markers.APP6:
+                    case JpegConstants.Markers.APP7:
+                    case JpegConstants.Markers.APP8:
+                    case JpegConstants.Markers.APP9:
+                    case JpegConstants.Markers.APP10:
+                    case JpegConstants.Markers.APP11:
+                    case JpegConstants.Markers.APP12:
+                    case JpegConstants.Markers.APP13:
                         this.InputStream.Skip(remaining);
                         break;
 
-                    case PdfJsJpegConstants.Markers.APP14:
+                    case JpegConstants.Markers.APP14:
                         this.ProcessApp14Marker(remaining);
                         break;
 
-                    case PdfJsJpegConstants.Markers.APP15:
-                    case PdfJsJpegConstants.Markers.COM:
+                    case JpegConstants.Markers.APP15:
+                    case JpegConstants.Markers.COM:
                         this.InputStream.Skip(remaining);
                         break;
 
-                    case PdfJsJpegConstants.Markers.DQT:
+                    case JpegConstants.Markers.DQT:
                         this.ProcessDefineQuantizationTablesMarker(remaining);
                         break;
 
-                    case PdfJsJpegConstants.Markers.SOF0:
-                    case PdfJsJpegConstants.Markers.SOF1:
-                    case PdfJsJpegConstants.Markers.SOF2:
+                    case JpegConstants.Markers.SOF0:
+                    case JpegConstants.Markers.SOF1:
+                    case JpegConstants.Markers.SOF2:
                         this.ProcessStartOfFrameMarker(remaining, fileMarker);
                         break;
 
-                    case PdfJsJpegConstants.Markers.DHT:
+                    case JpegConstants.Markers.DHT:
                         this.ProcessDefineHuffmanTablesMarker(remaining);
                         break;
 
-                    case PdfJsJpegConstants.Markers.DRI:
+                    case JpegConstants.Markers.DRI:
                         this.ProcessDefineRestartIntervalMarker(remaining);
                         break;
 
-                    case PdfJsJpegConstants.Markers.SOS:
+                    case JpegConstants.Markers.SOS:
                         this.ProcessStartOfScanMarker();
                         break;
                 }
@@ -345,11 +347,11 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.PdfJsPort
 
             if (this.NumberOfComponents == 3)
             {
-                if (this.adobe.Equals(default(PdfJsAdobe)) || this.adobe.ColorTransform == PdfJsJpegConstants.Markers.Adobe.ColorTransformYCbCr)
+                if (this.adobe.Equals(default(PdfJsAdobe)) || this.adobe.ColorTransform == JpegConstants.Markers.Adobe.ColorTransformYCbCr)
                 {
                     this.FillYCbCrImage(image);
                 }
-                else if (this.adobe.ColorTransform == PdfJsJpegConstants.Markers.Adobe.ColorTransformUnknown)
+                else if (this.adobe.ColorTransform == JpegConstants.Markers.Adobe.ColorTransformUnknown)
                 {
                     this.FillRgbImage(image);
                 }
@@ -357,7 +359,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.PdfJsPort
 
             if (this.NumberOfComponents == 4)
             {
-                if (this.adobe.ColorTransform == PdfJsJpegConstants.Markers.Adobe.ColorTransformYcck)
+                if (this.adobe.ColorTransform == JpegConstants.Markers.Adobe.ColorTransformYcck)
                 {
                     this.FillYcckImage(image);
                 }
@@ -412,11 +414,11 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.PdfJsPort
             this.InputStream.Read(this.temp, 0, 13);
             remaining -= 13;
 
-            bool isJfif = this.temp[0] == PdfJsJpegConstants.Markers.JFif.J &&
-                          this.temp[1] == PdfJsJpegConstants.Markers.JFif.F &&
-                          this.temp[2] == PdfJsJpegConstants.Markers.JFif.I &&
-                          this.temp[3] == PdfJsJpegConstants.Markers.JFif.F &&
-                          this.temp[4] == PdfJsJpegConstants.Markers.JFif.Null;
+            bool isJfif = this.temp[0] == JpegConstants.Markers.JFif.J &&
+                          this.temp[1] == JpegConstants.Markers.JFif.F &&
+                          this.temp[2] == JpegConstants.Markers.JFif.I &&
+                          this.temp[3] == JpegConstants.Markers.JFif.F &&
+                          this.temp[4] == JpegConstants.Markers.JFif.Null;
 
             if (isJfif)
             {
@@ -454,12 +456,12 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.PdfJsPort
             byte[] profile = new byte[remaining];
             this.InputStream.Read(profile, 0, remaining);
 
-            if (profile[0] == PdfJsJpegConstants.Markers.Exif.E &&
-                profile[1] == PdfJsJpegConstants.Markers.Exif.X &&
-                profile[2] == PdfJsJpegConstants.Markers.Exif.I &&
-                profile[3] == PdfJsJpegConstants.Markers.Exif.F &&
-                profile[4] == PdfJsJpegConstants.Markers.Exif.Null &&
-                profile[5] == PdfJsJpegConstants.Markers.Exif.Null)
+            if (profile[0] == JpegConstants.Markers.Exif.E &&
+                profile[1] == JpegConstants.Markers.Exif.X &&
+                profile[2] == JpegConstants.Markers.Exif.I &&
+                profile[3] == JpegConstants.Markers.Exif.F &&
+                profile[4] == JpegConstants.Markers.Exif.Null &&
+                profile[5] == JpegConstants.Markers.Exif.Null)
             {
                 this.isExif = true;
                 metadata.ExifProfile = new ExifProfile(profile);
@@ -485,18 +487,18 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.PdfJsPort
             this.InputStream.Read(identifier, 0, Icclength);
             remaining -= Icclength; // We have read it by this point
 
-            if (identifier[0] == PdfJsJpegConstants.Markers.ICC.I &&
-                identifier[1] == PdfJsJpegConstants.Markers.ICC.C &&
-                identifier[2] == PdfJsJpegConstants.Markers.ICC.C &&
-                identifier[3] == PdfJsJpegConstants.Markers.ICC.UnderScore &&
-                identifier[4] == PdfJsJpegConstants.Markers.ICC.P &&
-                identifier[5] == PdfJsJpegConstants.Markers.ICC.R &&
-                identifier[6] == PdfJsJpegConstants.Markers.ICC.O &&
-                identifier[7] == PdfJsJpegConstants.Markers.ICC.F &&
-                identifier[8] == PdfJsJpegConstants.Markers.ICC.I &&
-                identifier[9] == PdfJsJpegConstants.Markers.ICC.L &&
-                identifier[10] == PdfJsJpegConstants.Markers.ICC.E &&
-                identifier[11] == PdfJsJpegConstants.Markers.ICC.Null)
+            if (identifier[0] == JpegConstants.Markers.ICC.I &&
+                identifier[1] == JpegConstants.Markers.ICC.C &&
+                identifier[2] == JpegConstants.Markers.ICC.C &&
+                identifier[3] == JpegConstants.Markers.ICC.UnderScore &&
+                identifier[4] == JpegConstants.Markers.ICC.P &&
+                identifier[5] == JpegConstants.Markers.ICC.R &&
+                identifier[6] == JpegConstants.Markers.ICC.O &&
+                identifier[7] == JpegConstants.Markers.ICC.F &&
+                identifier[8] == JpegConstants.Markers.ICC.I &&
+                identifier[9] == JpegConstants.Markers.ICC.L &&
+                identifier[10] == JpegConstants.Markers.ICC.E &&
+                identifier[11] == JpegConstants.Markers.ICC.Null)
             {
                 byte[] profile = new byte[remaining];
                 this.InputStream.Read(profile, 0, remaining);
@@ -534,11 +536,11 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.PdfJsPort
             this.InputStream.Read(this.temp, 0, 12);
             remaining -= 12;
 
-            bool isAdobe = this.temp[0] == PdfJsJpegConstants.Markers.Adobe.A &&
-                           this.temp[1] == PdfJsJpegConstants.Markers.Adobe.D &&
-                           this.temp[2] == PdfJsJpegConstants.Markers.Adobe.O &&
-                           this.temp[3] == PdfJsJpegConstants.Markers.Adobe.B &&
-                           this.temp[4] == PdfJsJpegConstants.Markers.Adobe.E;
+            bool isAdobe = this.temp[0] == JpegConstants.Markers.Adobe.A &&
+                           this.temp[1] == JpegConstants.Markers.Adobe.D &&
+                           this.temp[2] == JpegConstants.Markers.Adobe.O &&
+                           this.temp[3] == JpegConstants.Markers.Adobe.B &&
+                           this.temp[4] == JpegConstants.Markers.Adobe.E;
 
             if (isAdobe)
             {
@@ -646,8 +648,8 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.PdfJsPort
 
             this.Frame = new PdfJsFrame
             {
-                Extended = frameMarker.Marker == PdfJsJpegConstants.Markers.SOF1,
-                Progressive = frameMarker.Marker == PdfJsJpegConstants.Markers.SOF2,
+                Extended = frameMarker.Marker == JpegConstants.Markers.SOF1,
+                Progressive = frameMarker.Marker == JpegConstants.Markers.SOF2,
                 Precision = this.temp[0],
                 Scanlines = (short)((this.temp[1] << 8) | this.temp[2]),
                 SamplesPerLine = (short)((this.temp[3] << 8) | this.temp[4]),

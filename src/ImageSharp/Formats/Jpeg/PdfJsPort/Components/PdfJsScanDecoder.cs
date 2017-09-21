@@ -8,6 +8,8 @@ using System.Runtime.CompilerServices;
 
 namespace SixLabors.ImageSharp.Formats.Jpeg.PdfJsPort.Components
 {
+    using SixLabors.ImageSharp.Formats.Jpeg.Common;
+
     /// <summary>
     /// Provides the means to decode a spectral scan
     /// </summary>
@@ -155,7 +157,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.PdfJsPort.Components
                 ushort marker = fileMarker.Marker;
 
                 // RSTn - We've alread read the bytes and altered the position so no need to skip
-                if (marker >= PdfJsJpegConstants.Markers.RST0 && marker <= PdfJsJpegConstants.Markers.RST7)
+                if (marker >= JpegConstants.Markers.RST0 && marker <= JpegConstants.Markers.RST7)
                 {
                     continue;
                 }
@@ -583,7 +585,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.PdfJsPort.Components
                 this.endOfStreamReached = true;
             }
 
-            if (this.bitsData == PdfJsJpegConstants.Markers.Prefix)
+            if (this.bitsData == JpegConstants.Markers.Prefix)
             {
                 int nextByte = stream.ReadByte();
                 if (nextByte != 0)

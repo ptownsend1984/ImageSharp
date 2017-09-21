@@ -2,12 +2,12 @@
 // Licensed under the Apache License, Version 2.0.
 
 // ReSharper disable InconsistentNaming
-namespace SixLabors.ImageSharp.Formats.Jpeg.PdfJsPort
+namespace SixLabors.ImageSharp.Formats.Jpeg.Common
 {
     /// <summary>
     /// Contains jpeg constant values
     /// </summary>
-    internal static class PdfJsJpegConstants
+    internal static class JpegConstants
     {
         /// <summary>
         /// Contains marker specific constants
