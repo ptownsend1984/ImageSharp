@@ -3,6 +3,7 @@
 
 using System;
 using System.Buffers;
+using System.IO;
 
 namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort.Components.Decoder
 {
@@ -128,13 +129,13 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort.Components.Decoder
         }
 
         /// <summary>
-        /// Internal part of the DHT processor, whatever does it mean
+        /// Generates the individual data buffers to allow fast decoding and lookup of the Huffman code
         /// </summary>
-        /// <param name="inputProcessor">The decoder instance</param>
+        /// <param name="stream">The input stream</param>
         /// <param name="defineHuffmanTablesData">The temporal buffer that holds the data that has been read from the Jpeg stream</param>
         /// <param name="remaining">Remaining bits</param>
         public void ProcessDefineHuffmanTablesMarkerLoop(
-            ref InputProcessor inputProcessor,
+            Stream stream,
             byte[] defineHuffmanTablesData,
             ref int remaining)
         {
@@ -170,7 +171,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort.Components.Decoder
             try
             {
                 values = BytePool256.Rent(MaxNCodes);
-                inputProcessor.ReadFull(values, 0, this.Length);
+                stream.Read(values, 0, this.Length);
 
                 for (int i = 0; i < values.Length; i++)
                 {

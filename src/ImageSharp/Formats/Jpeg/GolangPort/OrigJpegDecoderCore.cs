@@ -4,7 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-
+using System.Runtime.CompilerServices;
 using SixLabors.ImageSharp.Formats.Jpeg.Common;
 using SixLabors.ImageSharp.Formats.Jpeg.Common.Decoder;
 using SixLabors.ImageSharp.Formats.Jpeg.GolangPort.Components.Decoder;
@@ -48,19 +48,9 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
         private readonly Configuration configuration;
 
         /// <summary>
-        /// The App14 marker color-space
+        /// Holds marker buffers on read
         /// </summary>
-        private byte adobeTransform;
-
-        /// <summary>
-        /// Whether the image is in CMYK format with an App14 marker
-        /// </summary>
-        private bool adobeTransformValid;
-
-        /// <summary>
-        /// The horizontal resolution. Calculated if the image has a JFIF header.
-        /// </summary>
-        private short horizontalResolution;
+        private readonly byte[] markerBuffer = new byte[2];
 
         /// <summary>
         /// Whether the image has a JFIF header
@@ -68,14 +58,24 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
         private bool isJfif;
 
         /// <summary>
+        /// Contains information about the JFIF marker
+        /// </summary>
+        private JFifMarker jFif;
+
+        /// <summary>
+        /// Whether the image has an Adobe marker
+        /// </summary>
+        private bool isAdobe;
+
+        /// <summary>
+        /// Contains information about the Adobe marker
+        /// </summary>
+        private AdobeMarker adobe;
+
+        /// <summary>
         /// Whether the image has a EXIF header
         /// </summary>
         private bool isExif;
-
-        /// <summary>
-        /// The vertical resolution. Calculated if the image has a JFIF header.
-        /// </summary>
-        private short verticalResolution;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="OrigJpegDecoderCore" /> class.
@@ -221,89 +221,70 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
             this.InputStream = stream;
             this.InputProcessor = new InputProcessor(stream, this.Temp);
 
-            // Check for the Start Of Image marker.
-            this.InputProcessor.ReadFull(this.Temp, 0, 2);
-            if (this.Temp[0] != OrigJpegConstants.Markers.XFF || this.Temp[1] != OrigJpegConstants.Markers.SOI)
+            ushort fileMarker = this.ReadUint16();
+            if (fileMarker != JpegConstants.Markers.SOI)
             {
                 throw new ImageFormatException("Missing SOI marker.");
             }
 
-            // Process the remaining segments until the End Of Image marker.
-            bool processBytes = true;
-
-            // we can't currently short circute progressive images so don't try.
-            while (processBytes)
+            fileMarker = this.ReadUint16();
+            while (fileMarker != JpegConstants.Markers.EOI)
             {
-                this.InputProcessor.ReadFull(this.Temp, 0, 2);
-                while (this.Temp[0] != 0xff)
-                {
-                    // Strictly speaking, this is a format error. However, libjpeg is
-                    // liberal in what it accepts. As of version 9, next_marker in
-                    // jdmarker.c treats this as a warning (JWRN_EXTRANEOUS_DATA) and
-                    // continues to decode the stream. Even before next_marker sees
-                    // extraneous data, jpeg_fill_bit_buffer in jdhuff.c reads as many
-                    // bytes as it can, possibly past the end of a scan's data. It
-                    // effectively puts back any markers that it overscanned (e.g. an
-                    // "\xff\xd9" EOI marker), but it does not put back non-marker data,
-                    // and thus it can silently ignore a small number of extraneous
-                    // non-marker bytes before next_marker has a chance to see them (and
-                    // print a warning).
-                    // We are therefore also liberal in what we accept. Extraneous data
-                    // is silently ignore
-                    // This is similar to, but not exactly the same as, the restart
-                    // mechanism within a scan (the RST[0-7] markers).
-                    // Note that extraneous 0xff bytes in e.g. SOS data are escaped as
-                    // "\xff\x00", and so are detected a little further down below.
-                    this.Temp[0] = this.Temp[1];
-                    this.Temp[1] = this.InputProcessor.ReadByte();
-                }
+                // Get the marker length
+                int remaining = this.ReadUint16() - 2;
 
-                byte marker = this.Temp[1];
-                if (marker == 0)
+                switch (fileMarker)
                 {
-                    // Treat "\xff\x00" as extraneous data.
-                    continue;
-                }
+                    case JpegConstants.Markers.APP0:
+                        this.ProcessApplicationHeaderMarker(remaining);
+                        break;
 
-                while (marker == 0xff)
-                {
-                    // Section B.1.1.2 says, "Any marker may optionally be preceded by any
-                    // number of fill bytes, which are bytes assigned code X'FF'".
-                    marker = this.InputProcessor.ReadByte();
-                }
+                    case JpegConstants.Markers.APP1:
+                        this.ProcessApp1Marker(remaining);
+                        break;
 
-                // End Of Image.
-                if (marker == OrigJpegConstants.Markers.EOI)
-                {
-                    break;
-                }
+                    case JpegConstants.Markers.APP2:
+                        this.ProcessApp2Marker(remaining);
+                        break;
+                    case JpegConstants.Markers.APP3:
+                    case JpegConstants.Markers.APP4:
+                    case JpegConstants.Markers.APP5:
+                    case JpegConstants.Markers.APP6:
+                    case JpegConstants.Markers.APP7:
+                    case JpegConstants.Markers.APP8:
+                    case JpegConstants.Markers.APP9:
+                    case JpegConstants.Markers.APP10:
+                    case JpegConstants.Markers.APP11:
+                    case JpegConstants.Markers.APP12:
+                    case JpegConstants.Markers.APP13:
+                        this.InputStream.Skip(remaining);
+                        break;
 
-                if (marker >= OrigJpegConstants.Markers.RST0 && marker <= OrigJpegConstants.Markers.RST7)
-                {
-                    // Figures B.2 and B.16 of the specification suggest that restart markers should
-                    // only occur between Entropy Coded Segments and not after the final ECS.
-                    // However, some encoders may generate incorrect JPEGs with a final restart
-                    // marker. That restart marker will be seen here instead of inside the ProcessSOS
-                    // method, and is ignored as a harmless error. Restart markers have no extra data,
-                    // so we check for this before we read the 16-bit length of the segment.
-                    continue;
-                }
+                    case JpegConstants.Markers.APP14:
+                        this.ProcessApp14Marker(remaining);
+                        break;
 
-                // Read the 16-bit length of the segment. The value includes the 2 bytes for the
-                // length itself, so we subtract 2 to get the number of remaining bytes.
-                this.InputProcessor.ReadFull(this.Temp, 0, 2);
-                int remaining = (this.Temp[0] << 8) + this.Temp[1] - 2;
-                if (remaining < 0)
-                {
-                    throw new ImageFormatException("Short segment length.");
-                }
+                    case JpegConstants.Markers.APP15:
+                    case JpegConstants.Markers.COM:
+                        this.InputStream.Skip(remaining);
+                        break;
 
-                switch (marker)
-                {
-                    case OrigJpegConstants.Markers.SOF0:
-                    case OrigJpegConstants.Markers.SOF1:
-                    case OrigJpegConstants.Markers.SOF2:
-                        this.IsProgressive = marker == OrigJpegConstants.Markers.SOF2;
+                    case JpegConstants.Markers.DQT:
+                        if (metadataOnly)
+                        {
+                            this.InputStream.Skip(remaining);
+                        }
+                        else
+                        {
+                            this.ProcessDefineQuantizationTablesMarker(remaining);
+                        }
+
+                        break;
+
+                    case JpegConstants.Markers.SOF0:
+                    case JpegConstants.Markers.SOF1:
+                    case JpegConstants.Markers.SOF2:
+                        this.IsProgressive = fileMarker == OrigJpegConstants.Markers.SOF2;
                         this.ProcessStartOfFrameMarker(remaining);
                         if (metadataOnly && this.isJfif)
                         {
@@ -311,10 +292,11 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
                         }
 
                         break;
-                    case OrigJpegConstants.Markers.DHT:
+
+                    case JpegConstants.Markers.DHT:
                         if (metadataOnly)
                         {
-                            this.InputProcessor.Skip(remaining);
+                            this.InputStream.Skip(remaining);
                         }
                         else
                         {
@@ -322,37 +304,11 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
                         }
 
                         break;
-                    case OrigJpegConstants.Markers.DQT:
+
+                    case JpegConstants.Markers.DRI:
                         if (metadataOnly)
                         {
-                            this.InputProcessor.Skip(remaining);
-                        }
-                        else
-                        {
-                            this.ProcessDqt(remaining);
-                        }
-
-                        break;
-                    case OrigJpegConstants.Markers.SOS:
-                        if (metadataOnly)
-                        {
-                            return;
-                        }
-
-                        // when this is a progressive image this gets called a number of times
-                        // need to know how many times this should be called in total.
-                        this.ProcessStartOfScan(remaining);
-                        if (this.InputProcessor.ReachedEOF || !this.IsProgressive)
-                        {
-                            // if unexpeced EOF reached or this is not a progressive image we can stop processing bytes as we now have the image data.
-                            processBytes = false;
-                        }
-
-                        break;
-                    case OrigJpegConstants.Markers.DRI:
-                        if (metadataOnly)
-                        {
-                            this.InputProcessor.Skip(remaining);
+                            this.InputStream.Skip(remaining);
                         }
                         else
                         {
@@ -360,133 +316,93 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
                         }
 
                         break;
-                    case OrigJpegConstants.Markers.APP0:
-                        this.ProcessApplicationHeader(remaining);
-                        break;
-                    case OrigJpegConstants.Markers.APP1:
-                        this.ProcessApp1Marker(remaining);
-                        break;
-                    case OrigJpegConstants.Markers.APP2:
-                        this.ProcessApp2Marker(remaining);
-                        break;
-                    case OrigJpegConstants.Markers.APP14:
-                        this.ProcessApp14Marker(remaining);
-                        break;
-                    default:
-                        if ((marker >= OrigJpegConstants.Markers.APP0 && marker <= OrigJpegConstants.Markers.APP15)
-                            || marker == OrigJpegConstants.Markers.COM)
-                        {
-                            this.InputProcessor.Skip(remaining);
-                        }
-                        else if (marker < OrigJpegConstants.Markers.SOF0)
-                        {
-                            // See Table B.1 "Marker code assignments".
-                            throw new ImageFormatException("Unknown marker");
-                        }
-                        else
-                        {
-                            throw new ImageFormatException("Unknown marker");
-                        }
 
+                    case JpegConstants.Markers.SOS:
+                        this.ProcessStartOfScanMarker(remaining);
                         break;
                 }
+
+                // Read on.
+                fileMarker = FindNextFileMarker(this.markerBuffer, this.InputStream);
             }
 
-            this.InitDerivedMetaDataProperties();
+            this.AssignResolution();
         }
 
         /// <summary>
-        /// Processes the SOS (Start of scan marker).
+        /// Finds the next file marker within the byte stream.
+        /// </summary>
+        /// <param name="marker">The buffer to read file markers to</param>
+        /// <param name="stream">The input stream</param>
+        /// <returns>The <see cref="ushort"/></returns>
+        public static ushort FindNextFileMarker(byte[] marker, Stream stream)
+        {
+            int value = stream.Read(marker, 0, 2);
+
+            if (value == 0)
+            {
+                return JpegConstants.Markers.EOI;
+            }
+
+            if (marker[0] == JpegConstants.Markers.Prefix)
+            {
+                // According to Section B.1.1.2:
+                // "Any marker may optionally be preceded by any number of fill bytes, which are bytes assigned code 0xFF."
+                while (marker[1] == JpegConstants.Markers.Prefix)
+                {
+                    int suffix = stream.ReadByte();
+                    if (suffix == -1)
+                    {
+                        return JpegConstants.Markers.EOI;
+                    }
+
+                    marker[1] = (byte)value;
+                }
+
+                return (ushort)((marker[0] << 8) | marker[1]);
+            }
+
+            return (ushort)((marker[0] << 8) | marker[1]);
+        }
+
+        /// <summary>
+        /// Processes the application header containing the JFIF identifier plus extra data.
         /// </summary>
         /// <param name="remaining">The remaining bytes in the segment block.</param>
-        /// <exception cref="ImageFormatException">
-        /// Missing SOF Marker
-        /// SOS has wrong length
-        /// </exception>
-        private void ProcessStartOfScan(int remaining)
+        private void ProcessApplicationHeaderMarker(int remaining)
         {
-            var scan = default(OrigJpegScanDecoder);
-            OrigJpegScanDecoder.InitStreamReading(&scan, this, remaining);
-            this.InputProcessor.Bits = default(Bits);
-            scan.DecodeBlocks(this);
-        }
-
-        /// <summary>
-        /// Assigns derived metadata properties to <see cref="MetaData"/>, eg. horizontal and vertical resolution if it has a JFIF header.
-        /// </summary>
-        private void InitDerivedMetaDataProperties()
-        {
-            if (this.isJfif && this.horizontalResolution > 0 && this.verticalResolution > 0)
+            if (remaining < 5)
             {
-                this.MetaData.HorizontalResolution = this.horizontalResolution;
-                this.MetaData.VerticalResolution = this.verticalResolution;
-            }
-            else if (this.isExif)
-            {
-                ExifValue horizontal = this.MetaData.ExifProfile.GetValue(ExifTag.XResolution);
-                ExifValue vertical = this.MetaData.ExifProfile.GetValue(ExifTag.YResolution);
-                double horizontalValue = horizontal != null ? ((Rational)horizontal.Value).ToDouble() : 0;
-                double verticalValue = vertical != null ? ((Rational)vertical.Value).ToDouble() : 0;
-
-                if (horizontalValue > 0 && verticalValue > 0)
-                {
-                    this.MetaData.HorizontalResolution = horizontalValue;
-                    this.MetaData.VerticalResolution = verticalValue;
-                }
-            }
-        }
-
-        /// <summary>
-        /// Returns a value indicating whether the image in an RGB image.
-        /// </summary>
-        /// <returns>
-        /// The <see cref="bool" />.
-        /// </returns>
-        private bool IsRGB()
-        {
-            if (this.isJfif)
-            {
-                return false;
-            }
-
-            if (this.adobeTransformValid && this.adobeTransform == OrigJpegConstants.Adobe.ColorTransformUnknown)
-            {
-                // http://www.sno.phy.queensu.ca/~phil/exiftool/TagNames/JPEG.html#Adobe
-                // says that 0 means Unknown (and in practice RGB) and 1 means YCbCr.
-                return true;
-            }
-
-            return this.Components[0].Identifier == 'R' && this.Components[1].Identifier == 'G'
-                   && this.Components[2].Identifier == 'B';
-        }
-
-        /// <summary>
-        /// Processes the "Adobe" APP14 segment stores image encoding information for DCT filters.
-        /// This segment may be copied or deleted as a block using the Extra "Adobe" tag, but note that it is not
-        /// deleted by default when deleting all metadata because it may affect the appearance of the image.
-        /// </summary>
-        /// <param name="remaining">The remaining number of bytes in the stream.</param>
-        private void ProcessApp14Marker(int remaining)
-        {
-            if (remaining < 12)
-            {
-                this.InputProcessor.Skip(remaining);
+                // Skip the application header length
+                this.InputStream.Skip(remaining);
                 return;
             }
 
-            this.InputProcessor.ReadFull(this.Temp, 0, 12);
-            remaining -= 12;
+            this.InputStream.Read(this.Temp, 0, 13);
+            remaining -= 13;
 
-            if (this.Temp[0] == 'A' && this.Temp[1] == 'd' && this.Temp[2] == 'o' && this.Temp[3] == 'b'
-                && this.Temp[4] == 'e')
+            this.isJfif = this.Temp[0] == JpegConstants.Markers.JFif.J &&
+                          this.Temp[1] == JpegConstants.Markers.JFif.F &&
+                          this.Temp[2] == JpegConstants.Markers.JFif.I &&
+                          this.Temp[3] == JpegConstants.Markers.JFif.F &&
+                          this.Temp[4] == JpegConstants.Markers.JFif.Null;
+
+            if (this.isJfif)
             {
-                this.adobeTransformValid = true;
-                this.adobeTransform = this.Temp[11];
+                this.jFif = new JFifMarker
+                {
+                    MajorVersion = this.Temp[5],
+                    MinorVersion = this.Temp[6],
+                    DensityUnits = this.Temp[7],
+                    XDensity = (short)((this.Temp[8] << 8) | this.Temp[9]),
+                    YDensity = (short)((this.Temp[10] << 8) | this.Temp[11])
+                };
             }
 
+            // TODO: thumbnail
             if (remaining > 0)
             {
-                this.InputProcessor.Skip(remaining);
+                this.InputStream.Skip(remaining);
             }
         }
 
@@ -498,15 +414,20 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
         {
             if (remaining < 6 || this.IgnoreMetadata)
             {
-                this.InputProcessor.Skip(remaining);
+                // Skip the application header length
+                this.InputStream.Skip(remaining);
                 return;
             }
 
             byte[] profile = new byte[remaining];
-            this.InputProcessor.ReadFull(profile, 0, remaining);
+            this.InputStream.Read(profile, 0, remaining);
 
-            if (profile[0] == 'E' && profile[1] == 'x' && profile[2] == 'i' && profile[3] == 'f' && profile[4] == '\0'
-                && profile[5] == '\0')
+            if (profile[0] == JpegConstants.Markers.Exif.E &&
+                profile[1] == JpegConstants.Markers.Exif.X &&
+                profile[2] == JpegConstants.Markers.Exif.I &&
+                profile[3] == JpegConstants.Markers.Exif.F &&
+                profile[4] == JpegConstants.Markers.Exif.Null &&
+                profile[5] == JpegConstants.Markers.Exif.Null)
             {
                 this.isExif = true;
                 this.MetaData.ExifProfile = new ExifProfile(profile);
@@ -523,20 +444,29 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
             const int Icclength = 14;
             if (remaining < Icclength || this.IgnoreMetadata)
             {
-                this.InputProcessor.Skip(remaining);
+                this.InputStream.Skip(remaining);
                 return;
             }
 
             byte[] identifier = new byte[Icclength];
-            this.InputProcessor.ReadFull(identifier, 0, Icclength);
-            remaining -= Icclength; // we have read it by this point
+            this.InputStream.Read(identifier, 0, Icclength);
+            remaining -= Icclength; // We have read it by this point
 
-            if (identifier[0] == 'I' && identifier[1] == 'C' && identifier[2] == 'C' && identifier[3] == '_'
-                && identifier[4] == 'P' && identifier[5] == 'R' && identifier[6] == 'O' && identifier[7] == 'F'
-                && identifier[8] == 'I' && identifier[9] == 'L' && identifier[10] == 'E' && identifier[11] == '\0')
+            if (identifier[0] == JpegConstants.Markers.ICC.I &&
+                identifier[1] == JpegConstants.Markers.ICC.C &&
+                identifier[2] == JpegConstants.Markers.ICC.C &&
+                identifier[3] == JpegConstants.Markers.ICC.UnderScore &&
+                identifier[4] == JpegConstants.Markers.ICC.P &&
+                identifier[5] == JpegConstants.Markers.ICC.R &&
+                identifier[6] == JpegConstants.Markers.ICC.O &&
+                identifier[7] == JpegConstants.Markers.ICC.F &&
+                identifier[8] == JpegConstants.Markers.ICC.I &&
+                identifier[9] == JpegConstants.Markers.ICC.L &&
+                identifier[10] == JpegConstants.Markers.ICC.E &&
+                identifier[11] == JpegConstants.Markers.ICC.Null)
             {
                 byte[] profile = new byte[remaining];
-                this.InputProcessor.ReadFull(profile, 0, remaining);
+                this.InputStream.Read(profile, 0, remaining);
 
                 if (this.MetaData.IccProfile == null)
                 {
@@ -549,92 +479,49 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
             }
             else
             {
-                // not an ICC profile we can handle read the remaining so we can carry on and ignore this.
-                this.InputProcessor.Skip(remaining);
+                // Not an ICC profile we can handle. Skip the remaining bytes so we can carry on and ignore this.
+                this.InputStream.Skip(remaining);
             }
         }
 
         /// <summary>
-        /// Processes the application header containing the JFIF identifier plus extra data.
+        /// Processes the application header containing the Adobe identifier
+        /// which stores image encoding information for DCT filters.
         /// </summary>
         /// <param name="remaining">The remaining bytes in the segment block.</param>
-        private void ProcessApplicationHeader(int remaining)
+        private void ProcessApp14Marker(int remaining)
         {
-            if (remaining < 5)
+            if (remaining < 12)
             {
-                this.InputProcessor.Skip(remaining);
+                // Skip the application header length
+                this.InputStream.Skip(remaining);
                 return;
             }
 
-            this.InputProcessor.ReadFull(this.Temp, 0, 13);
-            remaining -= 13;
+            this.InputStream.Read(this.Temp, 0, 12);
+            remaining -= 12;
 
-            // TODO: We should be using constants for this.
-            this.isJfif = this.Temp[0] == 'J' && this.Temp[1] == 'F' && this.Temp[2] == 'I' && this.Temp[3] == 'F'
-                          && this.Temp[4] == '\x00';
+            this.isAdobe = this.Temp[0] == JpegConstants.Markers.Adobe.A &&
+                           this.Temp[1] == JpegConstants.Markers.Adobe.D &&
+                           this.Temp[2] == JpegConstants.Markers.Adobe.O &&
+                           this.Temp[3] == JpegConstants.Markers.Adobe.B &&
+                           this.Temp[4] == JpegConstants.Markers.Adobe.E;
 
-            if (this.isJfif)
+            if (this.isAdobe)
             {
-                this.horizontalResolution = (short)(this.Temp[9] + (this.Temp[8] << 8));
-                this.verticalResolution = (short)(this.Temp[11] + (this.Temp[10] << 8));
+                this.adobe = new AdobeMarker
+                {
+                    DCTEncodeVersion = (short)((this.Temp[5] << 8) | this.Temp[6]),
+                    APP14Flags0 = (short)((this.Temp[7] << 8) | this.Temp[8]),
+                    APP14Flags1 = (short)((this.Temp[9] << 8) | this.Temp[10]),
+                    ColorTransform = this.Temp[11]
+                };
             }
 
             if (remaining > 0)
             {
-                this.InputProcessor.Skip(remaining);
+                this.InputStream.Skip(remaining);
             }
-        }
-
-        /// <summary>
-        /// Processes a Define Huffman Table marker, and initializes a huffman
-        /// struct from its contents. Specified in section B.2.4.2.
-        /// </summary>
-        /// <param name="remaining">The remaining bytes in the segment block.</param>
-        private void ProcessDefineHuffmanTablesMarker(int remaining)
-        {
-            while (remaining > 0)
-            {
-                if (remaining < 17)
-                {
-                    throw new ImageFormatException("DHT has wrong length");
-                }
-
-                this.InputProcessor.ReadFull(this.Temp, 0, 17);
-
-                int tc = this.Temp[0] >> 4;
-                if (tc > OrigHuffmanTree.MaxTc)
-                {
-                    throw new ImageFormatException("Bad Tc value");
-                }
-
-                int th = this.Temp[0] & 0x0f;
-                if (th > OrigHuffmanTree.MaxTh || (!this.IsProgressive && (th > 1)))
-                {
-                    throw new ImageFormatException("Bad Th value");
-                }
-
-                int huffTreeIndex = (tc * OrigHuffmanTree.ThRowSize) + th;
-                this.HuffmanTrees[huffTreeIndex].ProcessDefineHuffmanTablesMarkerLoop(
-                    ref this.InputProcessor,
-                    this.Temp,
-                    ref remaining);
-            }
-        }
-
-        /// <summary>
-        /// Processes the DRI (Define Restart Interval Marker) Which specifies the interval between RSTn markers, in
-        /// macroblocks
-        /// </summary>
-        /// <param name="remaining">The remaining bytes in the segment block.</param>
-        private void ProcessDefineRestartIntervalMarker(int remaining)
-        {
-            if (remaining != 2)
-            {
-                throw new ImageFormatException("DRI has wrong length");
-            }
-
-            this.InputProcessor.ReadFull(this.Temp, 0, remaining);
-            this.RestartInterval = (this.Temp[0] << 8) + this.Temp[1];
         }
 
         /// <summary>
@@ -644,14 +531,14 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
         /// <exception cref="ImageFormatException">
         /// Thrown if the tables do not match the header
         /// </exception>
-        private void ProcessDqt(int remaining)
+        private void ProcessDefineQuantizationTablesMarker(int remaining)
         {
             while (remaining > 0)
             {
                 bool done = false;
 
                 remaining--;
-                byte x = this.InputProcessor.ReadByte();
+                byte x = (byte)this.InputStream.ReadByte();
                 int tq = x & 0x0F;
                 if (tq > MaxTq)
                 {
@@ -668,7 +555,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
                         }
 
                         remaining -= Block8x8F.Size;
-                        this.InputProcessor.ReadFull(this.Temp, 0, Block8x8F.Size);
+                        this.InputStream.Read(this.Temp, 0, Block8x8F.Size);
 
                         for (int i = 0; i < Block8x8F.Size; i++)
                         {
@@ -684,7 +571,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
                         }
 
                         remaining -= 2 * Block8x8F.Size;
-                        this.InputProcessor.ReadFull(this.Temp, 0, 2 * Block8x8F.Size);
+                        this.InputStream.Read(this.Temp, 0, 2 * Block8x8F.Size);
 
                         for (int i = 0; i < Block8x8F.Size; i++)
                         {
@@ -716,7 +603,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
         {
             if (this.ComponentCount != 0)
             {
-                throw new ImageFormatException("Multiple SOF markers");
+                throw new ImageFormatException("Multiple SOF markers. Only single frame jpegs supported.");
             }
 
             switch (remaining)
@@ -734,7 +621,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
                     throw new ImageFormatException("Incorrect number of components");
             }
 
-            this.InputProcessor.ReadFull(this.Temp, 0, remaining);
+            this.InputStream.Read(this.Temp, 0, remaining);
 
             // We only support 8-bit precision.
             if (this.Temp[0] != 8)
@@ -775,38 +662,129 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
             this.ColorSpace = this.DeduceJpegColorSpace();
         }
 
+        /// <summary>
+        /// Processes a Define Huffman Table marker, and initializes a Huffman
+        /// struct from its contents. Specified in section B.2.4.2.
+        /// </summary>
+        /// <param name="remaining">The remaining bytes in the segment block.</param>
+        private void ProcessDefineHuffmanTablesMarker(int remaining)
+        {
+            while (remaining > 0)
+            {
+                if (remaining < 17)
+                {
+                    throw new ImageFormatException("DHT has wrong length");
+                }
+
+                this.InputStream.Read(this.Temp, 0, 17);
+
+                int tc = this.Temp[0] >> 4;
+                if (tc > OrigHuffmanTree.MaxTc)
+                {
+                    throw new ImageFormatException("Bad Tc value");
+                }
+
+                int th = this.Temp[0] & 0x0f;
+                if (th > OrigHuffmanTree.MaxTh || (!this.IsProgressive && (th > 1)))
+                {
+                    throw new ImageFormatException("Bad Th value");
+                }
+
+                int huffTreeIndex = (tc * OrigHuffmanTree.ThRowSize) + th;
+                this.HuffmanTrees[huffTreeIndex].ProcessDefineHuffmanTablesMarkerLoop(
+                    this.InputStream,
+                    this.Temp,
+                    ref remaining);
+            }
+        }
+
+        /// <summary>
+        /// Processes the SOS (Start of scan marker).
+        /// </summary>
+        /// <param name="remaining">The remaining bytes in the segment block.</param>
+        /// <exception cref="ImageFormatException">
+        /// Missing SOF Marker
+        /// SOS has wrong length
+        /// </exception>
+        private void ProcessStartOfScanMarker(int remaining)
+        {
+            var scan = default(OrigJpegScanDecoder);
+            OrigJpegScanDecoder.InitStreamReading(&scan, this, remaining);
+
+            // TODO: InputProcessor can probably live within this struct only
+            this.InputProcessor.Bits = default(Bits);
+            scan.DecodeBlocks(this);
+        }
+
+        /// <summary>
+        /// Assigns the horizontal and vertical resolution to the image if it has a JFIF header or EXIF metadata.
+        /// </summary>
+        private void AssignResolution()
+        {
+            if (this.isExif)
+            {
+                ExifValue horizontal = this.MetaData.ExifProfile.GetValue(ExifTag.XResolution);
+                ExifValue vertical = this.MetaData.ExifProfile.GetValue(ExifTag.YResolution);
+                double horizontalValue = horizontal != null ? ((Rational)horizontal.Value).ToDouble() : 0;
+                double verticalValue = vertical != null ? ((Rational)vertical.Value).ToDouble() : 0;
+
+                if (horizontalValue > 0 && verticalValue > 0)
+                {
+                    this.MetaData.HorizontalResolution = horizontalValue;
+                    this.MetaData.VerticalResolution = verticalValue;
+                }
+            }
+            else if (this.jFif.XDensity > 0 && this.jFif.YDensity > 0)
+            {
+                this.MetaData.HorizontalResolution = this.jFif.XDensity;
+                this.MetaData.VerticalResolution = this.jFif.YDensity;
+            }
+        }
+
+        /// <summary>
+        /// Processes the DRI (Define Restart Interval Marker) Which specifies the interval between RSTn markers, in
+        /// macroblocks
+        /// </summary>
+        /// <param name="remaining">The remaining bytes in the segment block.</param>
+        private void ProcessDefineRestartIntervalMarker(int remaining)
+        {
+            if (remaining != 2)
+            {
+                throw new ImageFormatException($"DRI has wrong length: {remaining}");
+            }
+
+            this.RestartInterval = this.ReadUint16();
+        }
+
         private JpegColorSpace DeduceJpegColorSpace()
         {
             switch (this.ComponentCount)
             {
-                case 1: return JpegColorSpace.GrayScale;
-                case 3: return this.IsRGB() ? JpegColorSpace.RGB : JpegColorSpace.YCbCr;
-                case 4:
-
-                    if (!this.adobeTransformValid)
+                case 1:
+                    return JpegColorSpace.GrayScale;
+                case 3:
+                    if (!this.isAdobe || this.adobe.ColorTransform == JpegConstants.Markers.Adobe.ColorTransformYCbCr)
                     {
-                        throw new ImageFormatException(
-                            "Unknown color model: 4-component JPEG doesn't have Adobe APP14 metadata");
+                        return JpegColorSpace.YCbCr;
                     }
 
-                    // See http://www.sno.phy.queensu.ca/~phil/exiftool/TagNames/JPEG.html#Adobe
-                    // See https://docs.oracle.com/javase/8/docs/api/javax/imageio/metadata/doc-files/jpeg_metadata.html
-                    // TODO: YCbCrA?
-                    if (this.adobeTransform == OrigJpegConstants.Adobe.ColorTransformYcck)
+                    if (this.adobe.ColorTransform == JpegConstants.Markers.Adobe.ColorTransformUnknown)
+                    {
+                        return JpegColorSpace.RGB;
+                    }
+
+                    break;
+                case 4:
+                    if (this.adobe.ColorTransform == JpegConstants.Markers.Adobe.ColorTransformYcck)
                     {
                         return JpegColorSpace.Ycck;
                     }
-                    else if (this.adobeTransform == OrigJpegConstants.Adobe.ColorTransformUnknown)
-                    {
-                        // Assume CMYK
-                        return JpegColorSpace.Cmyk;
-                    }
 
-                    goto default;
-
-                default:
-                    throw new ImageFormatException("JpegDecoder only supports RGB, CMYK and Grayscale color spaces.");
+                    return JpegColorSpace.Cmyk;
             }
+
+            throw new ImageFormatException($"Unsupported color mode. Max components 4; found {this.ComponentCount}."
+                                           + "JpegDecoder only supports YCbCr, RGB, YccK, CMYK and Grayscale color spaces.");
         }
 
         private Image<TPixel> PostProcessIntoImage<TPixel>()
@@ -818,6 +796,17 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
                 postProcessor.PostProcess(image.Frames.RootFrame);
                 return image;
             }
+        }
+
+        /// <summary>
+        /// Reads a <see cref="ushort"/> from the stream advancing it by two bytes
+        /// </summary>
+        /// <returns>The <see cref="ushort"/></returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private ushort ReadUint16()
+        {
+            this.InputStream.Read(this.markerBuffer, 0, 2);
+            return (ushort)((this.markerBuffer[0] << 8) | this.markerBuffer[1]);
         }
     }
 }

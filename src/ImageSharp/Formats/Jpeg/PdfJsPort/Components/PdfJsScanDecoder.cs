@@ -5,11 +5,10 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
+using SixLabors.ImageSharp.Formats.Jpeg.Common;
 
 namespace SixLabors.ImageSharp.Formats.Jpeg.PdfJsPort.Components
 {
-    using SixLabors.ImageSharp.Formats.Jpeg.Common;
-
     /// <summary>
     /// Provides the means to decode a spectral scan
     /// </summary>
