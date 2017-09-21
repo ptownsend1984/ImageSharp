@@ -257,7 +257,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
                     case JpegConstants.Markers.APP11:
                     case JpegConstants.Markers.APP12:
                     case JpegConstants.Markers.APP13:
-                        this.InputStream.Skip(remaining);
+                        this.InputProcessor.Skip(remaining);
                         break;
 
                     case JpegConstants.Markers.APP14:
@@ -266,13 +266,13 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
 
                     case JpegConstants.Markers.APP15:
                     case JpegConstants.Markers.COM:
-                        this.InputStream.Skip(remaining);
+                        this.InputProcessor.Skip(remaining);
                         break;
 
                     case JpegConstants.Markers.DQT:
                         if (metadataOnly)
                         {
-                            this.InputStream.Skip(remaining);
+                            this.InputProcessor.Skip(remaining);
                         }
                         else
                         {
@@ -296,7 +296,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
                     case JpegConstants.Markers.DHT:
                         if (metadataOnly)
                         {
-                            this.InputStream.Skip(remaining);
+                            this.InputProcessor.Skip(remaining);
                         }
                         else
                         {
@@ -308,7 +308,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
                     case JpegConstants.Markers.DRI:
                         if (metadataOnly)
                         {
-                            this.InputStream.Skip(remaining);
+                            this.InputProcessor.Skip(remaining);
                         }
                         else
                         {
@@ -323,7 +323,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
                 }
 
                 // Read on.
-                fileMarker = FindNextFileMarker(this.markerBuffer, this.InputStream);
+                fileMarker = this.FindNextFileMarker();
             }
 
             this.AssignResolution();
@@ -332,37 +332,36 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
         /// <summary>
         /// Finds the next file marker within the byte stream.
         /// </summary>
-        /// <param name="marker">The buffer to read file markers to</param>
-        /// <param name="stream">The input stream</param>
         /// <returns>The <see cref="ushort"/></returns>
-        public static ushort FindNextFileMarker(byte[] marker, Stream stream)
+        public ushort FindNextFileMarker()
         {
-            int value = stream.Read(marker, 0, 2);
+            this.InputProcessor.ReadFull(this.markerBuffer, 0, 2);
 
-            if (value == 0)
+            if (this.InputProcessor.ReachedEOF)
             {
                 return JpegConstants.Markers.EOI;
             }
 
-            if (marker[0] == JpegConstants.Markers.Prefix)
+            byte value = this.markerBuffer[1];
+            if (this.markerBuffer[0] == JpegConstants.Markers.Prefix)
             {
                 // According to Section B.1.1.2:
                 // "Any marker may optionally be preceded by any number of fill bytes, which are bytes assigned code 0xFF."
-                while (marker[1] == JpegConstants.Markers.Prefix)
+                while (this.markerBuffer[1] == JpegConstants.Markers.Prefix)
                 {
-                    int suffix = stream.ReadByte();
-                    if (suffix == -1)
+                    this.InputProcessor.ReadByte();
+                    if (this.InputProcessor.ReachedEOF)
                     {
                         return JpegConstants.Markers.EOI;
                     }
 
-                    marker[1] = (byte)value;
+                    this.markerBuffer[1] = value;
                 }
 
-                return (ushort)((marker[0] << 8) | marker[1]);
+                return (ushort)((this.markerBuffer[0] << 8) | this.markerBuffer[1]);
             }
 
-            return (ushort)((marker[0] << 8) | marker[1]);
+            return (ushort)((this.markerBuffer[0] << 8) | this.markerBuffer[1]);
         }
 
         /// <summary>
@@ -374,11 +373,11 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
             if (remaining < 5)
             {
                 // Skip the application header length
-                this.InputStream.Skip(remaining);
+                this.InputProcessor.Skip(remaining);
                 return;
             }
 
-            this.InputStream.Read(this.Temp, 0, 13);
+            this.InputProcessor.ReadFull(this.Temp, 0, 13);
             remaining -= 13;
 
             this.isJfif = this.Temp[0] == JpegConstants.Markers.JFif.J &&
@@ -402,7 +401,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
             // TODO: thumbnail
             if (remaining > 0)
             {
-                this.InputStream.Skip(remaining);
+                this.InputProcessor.Skip(remaining);
             }
         }
 
@@ -415,12 +414,12 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
             if (remaining < 6 || this.IgnoreMetadata)
             {
                 // Skip the application header length
-                this.InputStream.Skip(remaining);
+                this.InputProcessor.Skip(remaining);
                 return;
             }
 
             byte[] profile = new byte[remaining];
-            this.InputStream.Read(profile, 0, remaining);
+            this.InputProcessor.ReadFull(profile, 0, remaining);
 
             if (profile[0] == JpegConstants.Markers.Exif.E &&
                 profile[1] == JpegConstants.Markers.Exif.X &&
@@ -444,12 +443,12 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
             const int Icclength = 14;
             if (remaining < Icclength || this.IgnoreMetadata)
             {
-                this.InputStream.Skip(remaining);
+                this.InputProcessor.Skip(remaining);
                 return;
             }
 
             byte[] identifier = new byte[Icclength];
-            this.InputStream.Read(identifier, 0, Icclength);
+            this.InputProcessor.ReadFull(identifier, 0, Icclength);
             remaining -= Icclength; // We have read it by this point
 
             if (identifier[0] == JpegConstants.Markers.ICC.I &&
@@ -466,7 +465,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
                 identifier[11] == JpegConstants.Markers.ICC.Null)
             {
                 byte[] profile = new byte[remaining];
-                this.InputStream.Read(profile, 0, remaining);
+                this.InputProcessor.ReadFull(profile, 0, remaining);
 
                 if (this.MetaData.IccProfile == null)
                 {
@@ -480,7 +479,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
             else
             {
                 // Not an ICC profile we can handle. Skip the remaining bytes so we can carry on and ignore this.
-                this.InputStream.Skip(remaining);
+                this.InputProcessor.Skip(remaining);
             }
         }
 
@@ -494,11 +493,11 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
             if (remaining < 12)
             {
                 // Skip the application header length
-                this.InputStream.Skip(remaining);
+                this.InputProcessor.Skip(remaining);
                 return;
             }
 
-            this.InputStream.Read(this.Temp, 0, 12);
+            this.InputProcessor.ReadFull(this.Temp, 0, 12);
             remaining -= 12;
 
             this.isAdobe = this.Temp[0] == JpegConstants.Markers.Adobe.A &&
@@ -520,7 +519,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
 
             if (remaining > 0)
             {
-                this.InputStream.Skip(remaining);
+                this.InputProcessor.Skip(remaining);
             }
         }
 
@@ -538,7 +537,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
                 bool done = false;
 
                 remaining--;
-                byte x = (byte)this.InputStream.ReadByte();
+                byte x = this.InputProcessor.ReadByte();
                 int tq = x & 0x0F;
                 if (tq > MaxTq)
                 {
@@ -555,7 +554,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
                         }
 
                         remaining -= Block8x8F.Size;
-                        this.InputStream.Read(this.Temp, 0, Block8x8F.Size);
+                        this.InputProcessor.ReadFull(this.Temp, 0, Block8x8F.Size);
 
                         for (int i = 0; i < Block8x8F.Size; i++)
                         {
@@ -571,7 +570,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
                         }
 
                         remaining -= 2 * Block8x8F.Size;
-                        this.InputStream.Read(this.Temp, 0, 2 * Block8x8F.Size);
+                        this.InputProcessor.ReadFull(this.Temp, 0, 2 * Block8x8F.Size);
 
                         for (int i = 0; i < Block8x8F.Size; i++)
                         {
@@ -621,7 +620,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
                     throw new ImageFormatException("Incorrect number of components");
             }
 
-            this.InputStream.Read(this.Temp, 0, remaining);
+            this.InputProcessor.ReadFull(this.Temp, 0, remaining);
 
             // We only support 8-bit precision.
             if (this.Temp[0] != 8)
@@ -676,7 +675,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
                     throw new ImageFormatException("DHT has wrong length");
                 }
 
-                this.InputStream.Read(this.Temp, 0, 17);
+                this.InputProcessor.ReadFull(this.Temp, 0, 17);
 
                 int tc = this.Temp[0] >> 4;
                 if (tc > OrigHuffmanTree.MaxTc)
@@ -692,7 +691,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
 
                 int huffTreeIndex = (tc * OrigHuffmanTree.ThRowSize) + th;
                 this.HuffmanTrees[huffTreeIndex].ProcessDefineHuffmanTablesMarkerLoop(
-                    this.InputStream,
+                    ref this.InputProcessor,
                     this.Temp,
                     ref remaining);
             }
@@ -805,7 +804,7 @@ namespace SixLabors.ImageSharp.Formats.Jpeg.GolangPort
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private ushort ReadUint16()
         {
-            this.InputStream.Read(this.markerBuffer, 0, 2);
+            this.InputProcessor.ReadFull(this.markerBuffer, 0, 2);
             return (ushort)((this.markerBuffer[0] << 8) | this.markerBuffer[1]);
         }
     }
